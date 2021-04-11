@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define _Thread_local
+
 cave_jsonc_document cave_jsonc_create_document(void) {
 	cave_jsonc_document doc = malloc(sizeof(struct _cave_jsonc_document));
 	doc->all_allocated = doc->root = NULL;
@@ -310,8 +310,8 @@ static void skip() {
 		next();
 }
 
-static char *buf;
-static size_t cap = 256, size = 0;
+static _Thread_local char *buf;
+static _Thread_local size_t cap = 256, size = 0;
 static void put_buf(char c) {
 	buf[size++] = c;
 	if(size == cap) {
@@ -642,8 +642,8 @@ cave_jsonc_document cave_jsonc_parse_document(int (*fgetc)(void *file), void *fi
 	return gdoc;
 }
 
-static int (*ffputc)(int c, void *file);
-static void *fofile;
+static _Thread_local int (*ffputc)(int c, void *file);
+static _Thread_local void *fofile;
 void sfoprint(const char *str) {
 	for(size_t i = 0; str[i]; i++)
 		ffputc(str[i], fofile);
@@ -725,7 +725,7 @@ static void print_tab(int count) {
 		ffputc('\t', ffile);
 }
 
-void serialize_value(cave_jsonc_value value, int mininize, int tab) {
+static void serialize_value(cave_jsonc_value value, int mininize, int tab) {
 	switch (cave_jsonc_get_value_type(value)) {
 		case CAVE_JSONC_UNDEFINED:
 		case CAVE_JSONC_NULL:
