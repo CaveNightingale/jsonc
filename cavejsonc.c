@@ -242,22 +242,21 @@ cave_jsonc_kvpair cave_jsonc_get_last_kvpair(cave_jsonc_object object) {
 cave_jsonc_kvpair cave_jsonc_insert_first_kvpair(cave_jsonc_object object, cave_jsonc_kvpair pair) {
 	pair->next = object->head;
 	pair->prev = NULL;
-	if(pair->next) {
+	if(pair->next)
 		pair->next->prev = pair;
-	} else {
+	else
 		object->tail = pair;
-	}
+	object->head = pair;
 	return pair;
 }
 
 cave_jsonc_kvpair cave_jsonc_insert_last_kvpair(cave_jsonc_object object, cave_jsonc_kvpair pair) {
 	pair->prev = object->tail;
 	pair->next = NULL;
-	if(pair->prev) {
+	if(pair->prev)
 		pair->prev->next = pair;
-	} else {
+	else
 		object->head = pair;
-	}
 	object->tail = pair;
 	return pair;
 }
@@ -306,8 +305,22 @@ static int next() {
 }
 
 static void skip() {
-	while(in == ' ' || in == '\r' || in == '\n' || in == '\t' || in == '\b')
-		next();
+	while(in == ' ' || in == '\r' || in == '\n' || in == '\t' || in == '\b') {
+		if(next() == '/') {
+			cave_jsonc_position p = pos;
+			int prev = in;
+			if(next() == '/') {
+				while(next() != '\n' && in >= 0);
+			} else if(in == '*') {
+				while((next() != '/' || prev != '*') && in >= 0)
+					prev = in;
+				next();
+			} else {
+				cave_jsonc_report_error(gdoc, "无意义内容", p, 1);
+				break;
+			}
+		}
+	}
 }
 
 static _Thread_local char *buf;
@@ -438,9 +451,9 @@ static cave_jsonc_string get_string() {
 				int ucs = get_utf16();
 				if(ucs < 0){
 					return NULL;
-				} else if(ucs > 32767) {
+				} else if((ucs & 0xfc00) == 0xd800) {
 					if(next() != '\\') {
-						cave_jsonc_report_error(gdoc, "代理对的转义必须成对存在", pos, 1);
+						cave_jsonc_report_error(gdoc, "代理对的转义必须成对存在，不能只有前半代理对", pos, 1);
 						free(buf);
 						return NULL;
 					}
@@ -453,6 +466,10 @@ static cave_jsonc_string get_string() {
 					if(unext < 0)
 						return NULL;
 					ucs = (((ucs & (~ 0xfc00)) << 10) + 0x10000) | (unext & (~ 0xfc00));
+				} else if((ucs & 0xfc00) == 0xdc00) {
+					cave_jsonc_report_error(gdoc, "代理对的转义必须成对存在，不能只有后半代理对", pos, 1);
+					free(buf);
+					return NULL;
 				}
 				if(ucs < 0x80) {
 					put_buf(ucs);
@@ -569,6 +586,11 @@ static cave_jsonc_value parse_value() {
 			}
 			next();
 			skip();
+			if(cave_jsonc_has_fatal_error(gdoc)) {
+				release_string(key);
+				cave_jsonc_report_error(gdoc, "键值之间应当使用冒号分隔", pos, 1);
+				return rval;
+			}
 			cave_jsonc_value value = parse_value();
 			if(value) {
 				cave_jsonc_kvpair pair = malloc(sizeof(struct _cave_jsonc_kvpair));
@@ -806,15 +828,26 @@ int cave_jsonc_print_error(cave_jsonc_document doc, int (*fputc)(int c, void *fi
 	char head[100];
 	size_t count = 0;
 	while(err) {
-		if(err->fatal)
-			sprintf(head, "%ld:%ld: 错误: ", err->position.row, err->position.cols);
-		else
-			sprintf(head, "%ld:%ld: 警告: ", err->position.row, err->position.cols);
+		if(err->position.row > 0 && err->position.cols > 0) {
+			if(err->fatal > 0)
+				sprintf(head, "%ld:%ld: 错误: ", err->position.row, err->position.cols);
+			else if (err->fatal == 0)
+				sprintf(head, "%ld:%ld: 警告: ", err->position.row, err->position.cols);
+			else
+				sprintf(head, "%ld:%ld: 信息: ", err->position.row, err->position.cols);
+		} else {
+			if(err->fatal > 0)
+				strcpy(head, "<未知>: 错误: ");
+			else if (err->fatal == 0)
+				strcpy(head, "<未知>: 警告: ");
+			else
+				strcpy(head, "<未知>: 信息: ");
+		}
 		ffputs(fputc, file, head);
 		ffputs(fputc, file, err->message);
 		fputc('\n', file);
+		count += err->fatal >= 0;
 		err = err->next;
-		count++;
 	}
 	if(count) {
 		sprintf(head, "共 %ld 个错误或警告\n", count);
@@ -946,27 +979,40 @@ int cave_jsonc_print_error_full(cave_jsonc_document doc, int (*fputc)(int c, voi
 	char head[100];
 	size_t count = 0;
 	while(err) {
-		ffputs(fputc, file, filename);
-		if(err->fatal)
-			sprintf(head, ":%ld:%ld: 错误: ", err->position.row, err->position.cols);
-		else
-			sprintf(head, ":%ld:%ld: 警告: ", err->position.row, err->position.cols);
-		ffputs(fputc, file, head);
-		ffputs(fputc, file, err->message);
-		fputc('\n', file);
-		fseek(in, err->position.index - err->position.cols + 1, SEEK_SET);
-		int out = 0, p = 1;
-		while(out != '\n' && out >= 0) {
-			fputc(out, file);
-			if(p == err->position.cols - 1)
-				ffputs(fputc, file, " !!这里!! ->> ");
-			p++;
-			out = fgetc(in);
+		if(err->position.row > 0 && err->position.cols > 0) {
+			ffputs(fputc, file, filename);
+			if(err->fatal > 0)
+				sprintf(head, ":%ld:%ld: 错误: ", err->position.row, err->position.cols);
+			else if(err->fatal == 0)
+				sprintf(head, ":%ld:%ld: 警告: ", err->position.row, err->position.cols);
+			else
+				sprintf(head, ":%ld:%ld: 信息: ", err->position.row, err->position.cols);
+			ffputs(fputc, file, head);
+			ffputs(fputc, file, err->message);
+			fputc('\n', file);
+			fseek(in, err->position.index - err->position.cols + 1, SEEK_SET);
+			int out = 0, p = 1;
+			while(out != '\n' && out >= 0) {
+				fputc(out, file);
+				if(p == err->position.cols - 1)
+					ffputs(fputc, file, " !!这里!! ->> ");
+				p++;
+				out = fgetc(in);
+			}
+			fputc('\n', file);
+			fputc('\n', file);
+		} else {
+			if(err->fatal > 0)
+				ffputs(fputc, file, "<未知>: 错误: ");
+			else if(err->fatal == 0)
+				ffputs(fputc, file, "<未知>: 警告: ");
+			else
+				ffputs(fputc, file, "<未知>: 信息: ");
+			ffputs(fputc, file, err->message);
+			ffputs(fputc, file, "\n\t<无源代码>\n\n");
 		}
-		fputc('\n', file);
-		fputc('\n', file);
+		count += err->fatal >= 0;
 		err = err->next;
-		count++;
 	}
 	if(count) {
 		sprintf(head, "共 %ld 个错误或警告\n", count);

@@ -27,7 +27,7 @@ typedef enum cave_jsonc_string_lifecycle_control {
  * 表示字符在文件中的位置
  */
 typedef struct cave_jsonc_position {
-	size_t row, cols, index;
+	ssize_t row, cols, index;
 } cave_jsonc_position;
 
 /**
@@ -143,7 +143,14 @@ typedef struct _cave_jsonc_document {
 
 typedef int cave_jsonc_boolean;
 
+/**
+ * json值的类型
+ */
 typedef enum cave_jsonc_type {
+	/**
+	 * 引入UNDEFINED的目的是简化NULL的处理，JSON没有这种类型
+	 * 剩下几种数据类型如字面意思
+	 */
 	CAVE_JSONC_UNDEFINED,
 	CAVE_JSONC_NULL,
 	CAVE_JSONC_BOOLEAN,
@@ -153,7 +160,13 @@ typedef enum cave_jsonc_type {
 	CAVE_JSONC_ARRAY,
 } cave_jsonc_type;
 
+/**
+ * 用来表示json中的值
+ */
 typedef struct _cave_jsonc_value {
+	/**
+	 * 值所属的文档，文档释放时会释放所有挂在文档上的json值
+	 */
 	cave_jsonc_document document;
 	cave_jsonc_position position;
 	cave_jsonc_type type;
@@ -167,9 +180,24 @@ typedef struct _cave_jsonc_value {
 	} value;
 } *cave_jsonc_value;
 
+/**
+ * 表示一个错误、警告或信息
+ */
 typedef struct _cave_jsonc_error {
+	/**
+	 * 严重程度
+	 * -1 信息，一般用于警告之后补充说明
+	 * 0 警告，一般用于不太严重的问题，例如JSON方言等
+	 * 1 错误，一般用于根本不能理解这段文字是什么意思
+	 */
 	int fatal;
+	/**
+	 * 信息
+	 */
 	const char *message;
+	/**
+	 * 位置
+	 */
 	cave_jsonc_position position;	
 	struct _cave_jsonc_error *next;
 } *cave_jsonc_error;
